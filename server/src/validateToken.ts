@@ -7,7 +7,7 @@ const TESTFLIGHT_PHONE = '+12345678901';
 const TESTFLIGHT_USER_ID = '286ef934-f3b8-4e94-b61f-1f1a088ac95e';
 
 // Cache validated tokens to reduce API calls
-const tokenCache = new Map<string, { userId: string, expiresAt: number }>();
+const tokenCache = new Map<string, { userId: string; userData: Record<string, unknown>; expiresAt: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 export async function validateAccessToken(
@@ -22,7 +22,7 @@ export async function validateAccessToken(
     const isTestFlightToken = token?.includes('testflight');
     const isTestFlightEmail = req.body?.email === TESTFLIGHT_EMAIL;
     const isTestFlightPhone = req.body?.phoneNumber === TESTFLIGHT_PHONE;
-    const isTestFlightUserId = req.body?.url?.includes(TESTFLIGHT_USER_ID);
+    // Note: isTestFlightUserId (req.body?.url) was removed — no route passes req.body.url anymore.
 
     // DISABLED 2026-07-13: auth bypass removed due to security incident
     // if (isTestFlightToken || isTestFlightEmail || isTestFlightPhone || isTestFlightUserId) {
@@ -49,6 +49,7 @@ export async function validateAccessToken(
     const cached = tokenCache.get(token as string);
     if (cached && cached.expiresAt > Date.now()) {
       req.userId = cached.userId;
+      req.userData = cached.userData;
       console.log('✅ [AUTH] Token validated (cached) - Request authenticated');
       return next();
     }
@@ -86,15 +87,20 @@ export async function validateAccessToken(
     }
 
     const userData = await response.json();
-    const userEmail = userData.authenticationMethods[0]?.email || 'unknown';
+    // authenticationMethods is a raw array from the CDP API — use .find(), not object-key access.
+    const emailMethod = userData.authenticationMethods?.find(
+      (m: { type: string; email?: string }) => m.type === 'email'
+    );
+    const userEmail = emailMethod?.email || 'unknown';
     console.log('✅ [AUTH] Token validated (fresh) for user:', userEmail);
 
     // Check if this is a TestFlight test account by email
     const isTestAccount = userEmail === TESTFLIGHT_EMAIL || userEmail === 'devtest@coinbase-demo.app';
 
-    // Cache the result
+    // Cache the result (including userData so routes like /onramp/limits can access authenticationMethods)
     tokenCache.set(token as string, {
       userId: userData.userId,
+      userData: { ...userData, testAccount: isTestAccount },
       expiresAt: Date.now() + CACHE_TTL
     });
 
